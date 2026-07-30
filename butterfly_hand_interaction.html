@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>灵动微光 - 手势蝴蝶交互</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Three.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <!-- MediaPipe Hands & Camera Utils CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #0d0f12;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+
+    /* Video and Canvas overlay styling */
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: #000;
+    }
+
+    video#webcam {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1); /* Mirror camera feed naturally */
+      z-index: 1;
+    }
+
+    canvas#webgl-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    /* Glassmorphism UI elements */
+    .glass-panel {
+      background: rgba(18, 22, 31, 0.65);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+    }
+
+    .glass-btn {
+      background: rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .glass-btn:hover {
+      background: rgba(255, 255, 255, 0.25);
+      border-color: rgba(255, 255, 255, 0.4);
+      transform: translateY(-2px);
+    }
+
+    .glass-btn:active {
+      transform: translateY(0);
+    }
+
+    /* Subtle pulse glow animation */
+    @keyframes subtlePulse {
+      0%, 100% { opacity: 0.8; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.04); }
+    }
+
+    .pulse-glow {
+      animation: subtlePulse 3s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="container">
+    <!-- Camera Video Element -->
+    <video id="webcam" autoplay playsinline muted></video>
+
+    <!-- Three.js Overlay Canvas -->
+    <canvas id="webgl-canvas"></canvas>
+
+    <!-- UI Overlay Header -->
+    <div class="absolute top-6 left-6 right-6 z-10 flex justify-between items-center pointer-events-none">
+      <!-- App Title -->
+      <div class="glass-panel px-5 py-3 rounded-2xl flex items-center space-x-3 pointer-events-auto">
+        <div class="w-3 h-3 rounded-full bg-pink-400 animate-pulse"></div>
+        <h1 class="text-white text-base font-medium tracking-wide">灵动蝴蝶 <span class="text-xs opacity-60 font-light ml-1">v2.0</span></h1>
+      </div>
+
+      <!-- Control Buttons -->
+      <div class="flex items-center space-x-3 pointer-events-auto">
+        <!-- Audio Toggle Button -->
+        <button id="btn-audio" class="glass-btn text-white w-11 h-11 rounded-2xl flex items-center justify-center text-sm shadow-lg">
+          <i id="audio-icon" class="fas fa-volume-up"></i>
+        </button>
+
+        <!-- Help Modal Button -->
+        <button id="btn-help" class="glass-btn text-white w-11 h-11 rounded-2xl flex items-center justify-center text-sm shadow-lg">
+          <i class="fas fa-question"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Gesture Status Indicator Badge -->
+    <div id="gesture-indicator" class="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-10 pointer-events-none">
+      <div class="glass-panel px-6 py-3 rounded-full flex items-center space-x-3 text-white text-sm font-light shadow-2xl transition-all duration-300">
+        <span id="gesture-icon" class="text-pink-400 text-lg"><i class="fas fa-hand-sparkles"></i></span>
+        <span id="gesture-text" class="tracking-wider">等待启动摄像头与手势识别...</span>
+      </div>
+    </div>
+
+    <!-- Start Camera Prompt Modal Overlay -->
+    <div id="start-overlay" class="absolute inset-0 z-30 flex items-center justify-center bg-black/75 backdrop-blur-md transition-opacity duration-500">
+      <div class="glass-panel p-8 rounded-3xl max-w-md w-11/12 text-center text-white space-y-6 shadow-2xl">
+        <div class="w-20 h-20 mx-auto rounded-full bg-gradient-to-tr from-pink-500/20 via-blue-500/20 to-yellow-500/20 border border-white/20 flex items-center justify-center text-3xl text-pink-300">
+          <i class="fas fa-butterfly"></i>
+        </div>
+        <div class="space-y-2">
+          <h2 class="text-2xl font-semibold tracking-wide">开启微光手势体验</h2>
+          <p class="text-xs text-gray-300 leading-relaxed">允许开启摄像头，手势将在本地实时识别。蝴蝶将随着您的手部动作起舞与栖息。</p>
+        </div>
+
+        <!-- Gesture Guide List -->
+        <div class="text-left text-xs text-gray-300 bg-white/5 p-4 rounded-2xl space-y-2.5 border border-white/10">
+          <div class="flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span><strong>摊开手心：</strong>3~5只蝴蝶飞来，轻盈停留在手心中憩息</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-yellow-400"></span>
+            <span><strong>伸出食指：</strong>一只蝴蝶精准飞来，停留在您的食指尖端</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-blue-400"></span>
+            <span><strong>捏成拳头：</strong>蝴蝶轻柔向拳头聚拢，在周围盘旋相伴</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span class="w-2 h-2 rounded-full bg-pink-400"></span>
+            <span><strong>张开手掌：</strong>蝴蝶在自然空间中自由翩翩起舞</span>
+          </div>
+        </div>
+
+        <button id="btn-start" class="w-full py-3.5 bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 hover:from-pink-600 hover:to-indigo-600 text-white text-sm font-medium rounded-2xl shadow-xl transition-all duration-300 transform hover:scale-[1.02] active:scale-[0.98]">
+          开启摄像头并启动
+        </button>
+      </div>
+    </div>
+
+    <!-- Help Tooltip Modal -->
+    <div id="help-modal" class="hidden absolute inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div class="glass-panel p-6 rounded-3xl max-w-sm w-11/12 text-white space-y-4">
+        <div class="flex justify-between items-center pb-2 border-b border-white/10">
+          <h3 class="font-medium text-sm">手势交互指南</h3>
+          <button id="btn-close-help" class="text-gray-400 hover:text-white text-sm"><i class="fas fa-times"></i></button>
+        </div>
+        <ul class="text-xs space-y-3 text-gray-300">
+          <li class="flex items-start space-x-2">
+            <i class="fas fa-hand-holding text-emerald-400 mt-0.5"></i>
+            <span><strong>摊开手心：</strong> 3~5只蝴蝶被吸引，温柔停落在您的手掌中央憩息。</span>
+          </li>
+          <li class="flex items-start space-x-2">
+            <i class="fas fa-hand-pointer text-yellow-400 mt-0.5"></i>
+            <span><strong>伸食指：</strong> 吸引1只蝴蝶精准停留在食指尖端。</span>
+          </li>
+          <li class="flex items-start space-x-2">
+            <i class="fas fa-hand-fist text-blue-400 mt-0.5"></i>
+            <span><strong>捏成拳头：</strong> 蝴蝶向拳头周围轻柔靠拢，不遮挡脸部。</span>
+          </li>
+          <li class="flex items-start space-x-2">
+            <i class="fas fa-hand text-pink-400 mt-0.5"></i>
+            <span><strong>平放/张开：</strong> 蝴蝶在全景空间中自然飞舞。</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let camera, hands;
+    let scene, threeCamera, renderer;
+    let butterflies = [];
+    let handLandmarks = null;
+    let currentGesture = 'NONE'; // 'PALM_OPEN', 'POINTING', 'FIST', 'OPEN', 'NONE'
+    
+    // Perched butterfly references
+    let landedFingerButterfly = null;
+    let landedPalmButterflies = [];
+
+    // Target tracking vectors
+    let targetFingerPos = new THREE.Vector3();
+    let handCenterPos = new THREE.Vector3();
+    let handNormal = new THREE.Vector3(0, 0, 1);
+
+    let isAudioMuted = false;
+    let audioCtx = null;
+
+    // Web Audio Synthesizer
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+    }
+
+    function playLandingSound(count = 1) {
+      if (isAudioMuted || !audioCtx) return;
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+
+      const now = audioCtx.currentTime;
+      const baseNotes = [523.25, 659.25, 783.99, 1046.50, 1318.51]; // C5, E5, G5, C6, E6
+      const numNotes = count > 1 ? 5 : 4;
+
+      for (let i = 0; i < numNotes; i++) {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(baseNotes[i % baseNotes.length], now + i * 0.06);
+
+        gain.gain.setValueAtTime(0.05, now + i * 0.06);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.06 + 0.35);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.start(now + i * 0.06);
+        osc.stop(now + i * 0.06 + 0.35);
+      }
+    }
+
+    function playGestureSound(type) {
+      if (isAudioMuted || !audioCtx) return;
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+
+      osc.type = 'triangle';
+      const baseFreq = type === 'PALM_OPEN' ? 520 : (type === 'FIST' ? 220 : (type === 'POINTING' ? 440 : 330));
+      osc.frequency.setValueAtTime(baseFreq, now);
+      osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.25, now + 0.2);
+
+      gain.gain.setValueAtTime(0.03, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      osc.start(now);
+      osc.stop(now + 0.22);
+    }
+
+    function createSketchButterfly(colorHex) {
+      const group = new THREE.Group();
+
+      const strokeColor = new THREE.Color(colorHex);
+      const strokeMaterial = new THREE.LineBasicMaterial({
+        color: strokeColor,
+        linewidth: 2,
+        transparent: true,
+        opacity: 0.95
+      });
+
+      const fillMaterial = new THREE.MeshBasicMaterial({
+        color: strokeColor,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.38,
+        depthWrite: false
+      });
+
+      // --- Left Wing Geometry (Matching stylized wing curves) ---
+      const wingCurve = new THREE.CurvePath();
+      const c1 = new THREE.CubicBezierCurve3(
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(-0.6, 0.8, 0.1),
+        new THREE.Vector3(-1.3, 0.4, 0.0),
+        new THREE.Vector3(-0.8, -0.2, 0)
+      );
+      const c2 = new THREE.CubicBezierCurve3(
+        new THREE.Vector3(-0.8, -0.2, 0),
+        new THREE.Vector3(-1.2, -0.9, 0),
+        new THREE.Vector3(-0.4, -1.0, 0),
+        new THREE.Vector3(0, -0.4, 0)
+      );
+      wingCurve.add(c1);
+      wingCurve.add(c2);
+
+      const wingPoints = wingCurve.getPoints(32);
+      const wingGeo = new THREE.BufferGeometry().setFromPoints(wingPoints);
+      const wingOutline = new THREE.Line(wingGeo, strokeMaterial);
+
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 0);
+      shape.bezierCurveTo(-0.6, 0.8, -1.3, 0.4, -0.8, -0.2);
+      shape.bezierCurveTo(-1.2, -0.9, -0.4, -1.0, 0, -0.4);
+      shape.closePath();
+
+      const shapeGeo = new THREE.ShapeGeometry(shape);
+      const wingFill = new THREE.Mesh(shapeGeo, fillMaterial);
+
+      const leftWingGroup = new THREE.Group();
+      leftWingGroup.add(wingOutline);
+      leftWingGroup.add(wingFill);
+
+      const rightWingGroup = new THREE.Group();
+      const rightOutline = wingOutline.clone();
+      rightOutline.scale.set(-1, 1, 1);
+      const rightFill = wingFill.clone();
+      rightFill.scale.set(-1, 1, 1);
+      rightWingGroup.add(rightOutline);
+      rightWingGroup.add(rightFill);
+
+      group.add(leftWingGroup);
+      group.add(rightWingGroup);
+
+      // --- Butterfly Body & Antennae ---
+      const bodyCurve = new THREE.CubicBezierCurve3(
+        new THREE.Vector3(0, 0.4, 0),
+        new THREE.Vector3(0.03, 0.0, 0),
+        new THREE.Vector3(-0.03, -0.4, 0),
+        new THREE.Vector3(0, -0.7, 0)
+      );
+      const bodyGeo = new THREE.BufferGeometry().setFromPoints(bodyCurve.getPoints(16));
+      const bodyLine = new THREE.Line(bodyGeo, strokeMaterial);
+      group.add(bodyLine);
+
+      const antLeftCurve = new THREE.CubicBezierCurve3(
+        new THREE.Vector3(0, 0.3, 0),
+        new THREE.Vector3(-0.1, 0.6, 0),
+        new THREE.Vector3(-0.25, 0.7, 0),
+        new THREE.Vector3(-0.35, 0.8, 0)
+      );
+      const antLeftLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(antLeftCurve.getPoints(12)), strokeMaterial);
+      const dotGeo = new THREE.SphereGeometry(0.04, 8, 8);
+      const dotMat = new THREE.MeshBasicMaterial({ color: strokeColor });
+      const dotLeft = new THREE.Mesh(dotGeo, dotMat);
+      dotLeft.position.set(-0.35, 0.8, 0);
+
+      const antRightLine = antLeftLine.clone();
+      antRightLine.scale.set(-1, 1, 1);
+      const dotRight = dotLeft.clone();
+      dotRight.position.set(0.35, 0.8, 0);
+
+      group.add(antLeftLine);
+      group.add(dotLeft);
+      group.add(antRightLine);
+      group.add(dotRight);
+
+      // Store animation metadata
+      group.userData = {
+        leftWing: leftWingGroup,
+        rightWing: rightWingGroup,
+        flapSpeed: 10 + Math.random() * 8,
+        flapPhase: Math.random() * Math.PI * 2,
+        velocity: new THREE.Vector3(
+          (Math.random() - 0.5) * 0.02,
+          (Math.random() - 0.5) * 0.02,
+          (Math.random() - 0.5) * 0.02
+        ),
+        targetPos: new THREE.Vector3(),
+        baseScale: 0.24 + Math.random() * 0.1,
+        wanderOffset: new THREE.Vector3(
+          (Math.random() - 0.5) * 10,
+          (Math.random() - 0.5) * 6,
+          (Math.random() - 0.5) * 4
+        ),
+        isPerched: false,
+        palmOffset: new THREE.Vector3() // Relative position on open palm
+      };
+
+      group.scale.setScalar(group.userData.baseScale);
+
+      return group;
+    }
+
+    function initThreeScene() {
+      const canvas = document.getElementById('webgl-canvas');
+      renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+
+      scene = new THREE.Scene();
+
+      const aspect = window.innerWidth / window.innerHeight;
+      threeCamera = new THREE.PerspectiveCamera(50, aspect, 0.1, 1000);
+      threeCamera.position.set(0, 0, 10);
+
+      // Pink (#FF69B4), Soft Blue (#3A86FF), Bright Yellow (#FFBE0B)
+      const colors = [0xFF69B4, 0x3A86FF, 0xFFBE0B];
+      const butterflyCount = 20;
+
+      for (let i = 0; i < butterflyCount; i++) {
+        const color = colors[i % colors.length];
+        const b = createSketchButterfly(color);
+
+        b.position.set(
+          (Math.random() - 0.5) * 14,
+          (Math.random() - 0.5) * 8,
+          (Math.random() - 0.5) * 6 - 1
+        );
+
+        butterflies.push(b);
+        scene.add(b);
+      }
+
+      window.addEventListener('resize', onWindowResize);
+    }
+
+    function onWindowResize() {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      threeCamera.aspect = width / height;
+      threeCamera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+    }
+
+    function initMediaPipe() {
+      const videoElement = document.getElementById('webcam');
+
+      hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+
+      hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.65,
+        minTrackingConfidence: 0.65
+      });
+
+      hands.onResults(onHandResults);
+
+      camera = new Camera(videoElement, {
+        onFrame: async () => {
+          await hands.send({ image: videoElement });
+        },
+        width: 1280,
+        height: 720
+      });
+
+      camera.start().then(() => {
+        document.getElementById('start-overlay').classList.add('opacity-0');
+        setTimeout(() => {
+          document.getElementById('start-overlay').classList.add('hidden');
+        }, 500);
+      });
+    }
+
+    // Convert normalized MediaPipe coordinates (0..1) to Three.js World Space
+    function videoToWorld(x, y, z = 0) {
+      const normX = (1 - x) * 2 - 1; // Mirrored horizontal
+      const normY = -(y * 2 - 1);    // Inverted vertical
+
+      const fov = threeCamera.fov * (Math.PI / 180);
+      const distance = 10;
+      const height = 2 * Math.tan(fov / 2) * distance;
+      const width = height * threeCamera.aspect;
+
+      return new THREE.Vector3(
+        normX * (width / 2),
+        normY * (height / 2),
+        -z * 4
+      );
+    }
+
+    function onHandResults(results) {
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        handLandmarks = results.multiHandLandmarks[0];
+
+        // 1. Calculate Index Fingertip Position (Landmark 8)
+        const indexTip = handLandmarks[8];
+        targetFingerPos.copy(videoToWorld(indexTip.x, indexTip.y, indexTip.z));
+
+        // 2. Calculate Palm Center Position (Average of Wrist[0], IndexMCP[5], MiddleMCP[9], RingMCP[13], PinkyMCP[17])
+        const p0 = handLandmarks[0];
+        const p5 = handLandmarks[5];
+        const p9 = handLandmarks[9];
+        const p13 = handLandmarks[13];
+        const p17 = handLandmarks[17];
+
+        const avgX = (p0.x + p5.x + p9.x + p13.x + p17.x) / 5;
+        const avgY = (p0.y + p5.y + p9.y + p13.y + p17.y) / 5;
+        const avgZ = (p0.z + p5.z + p9.z + p13.z + p17.z) / 5;
+
+        handCenterPos.copy(videoToWorld(avgX, avgY, avgZ));
+
+        // 3. Classify Gesture
+        classifyGesture(handLandmarks);
+      } else {
+        handLandmarks = null;
+        if (currentGesture !== 'NONE') {
+          currentGesture = 'NONE';
+          updateGestureUI('NONE', '伸出手掌，即可开启手势蝴蝶互动');
+          releaseAllLandedButterflies();
+        }
+      }
+    }
+
+    function classifyGesture(landmarks) {
+      const wrist = landmarks[0];
+      const getDist = (pt1, pt2) => Math.hypot(pt1.x - pt2.x, pt1.y - pt2.y, pt1.z - pt2.z);
+
+      // Fold checks for index, middle, ring, pinky
+      const indexFold = getDist(landmarks[5], landmarks[8]) < getDist(landmarks[0], landmarks[5]) * 0.6;
+      const middleFold = getDist(landmarks[9], landmarks[12]) < getDist(landmarks[0], landmarks[9]) * 0.6;
+      const ringFold = getDist(landmarks[13], landmarks[16]) < getDist(landmarks[0], landmarks[13]) * 0.6;
+      const pinkyFold = getDist(landmarks[17], landmarks[20]) < getDist(landmarks[0], landmarks[17]) * 0.6;
+
+      let detected = 'OPEN';
+
+      // 1. Index Pointing (伸出食指)
+      if (!indexFold && middleFold && ringFold && pinkyFold) {
+        detected = 'POINTING';
+      } 
+      // 2. Fist (捏成拳头)
+      else if (indexFold && middleFold && ringFold && pinkyFold) {
+        detected = 'FIST';
+      } 
+      // 3. Open Palm (摊开手心)
+      else if (!indexFold && !middleFold && !ringFold && !pinkyFold) {
+        const fingerSpread = getDist(landmarks[4], landmarks[20]);
+        if (fingerSpread > 0.22) {
+          detected = 'PALM_OPEN';
+        } else {
+          detected = 'OPEN';
+        }
+      } else {
+        detected = 'OPEN';
+      }
+
+      if (detected !== currentGesture) {
+        currentGesture = detected;
+        playGestureSound(currentGesture);
+
+        if (currentGesture === 'PALM_OPEN') {
+          updateGestureUI('PALM_OPEN', '摊开手心模式：蝴蝶飞落停在手心中憩息');
+          assignPalmButterflies();
+        } else if (currentGesture === 'POINTING') {
+          updateGestureUI('POINTING', '食指停落模式：蝴蝶停在指尖');
+          assignFingerButterfly();
+        } else if (currentGesture === 'FIST') {
+          updateGestureUI('FIST', '拳头聚拢模式：蝴蝶在周围轻柔相伴');
+          releaseAllLandedButterflies();
+        } else {
+          updateGestureUI('OPEN', '张开手掌模式：蝴蝶自由飞舞');
+          releaseAllLandedButterflies();
+        }
+      }
+    }
+
+    // Assign 3-4 butterflies to perch on the open palm
+    function assignPalmButterflies() {
+      releaseAllLandedButterflies();
+
+      // Sort butterflies by distance to hand center
+      const sorted = [...butterflies].sort((a, b) => {
+        return a.position.distanceTo(handCenterPos) - b.position.distanceTo(handCenterPos);
+      });
+
+      const count = Math.min(4, sorted.length);
+      const offsets = [
+        new THREE.Vector3(0, 0.1, 0.2),
+        new THREE.Vector3(-0.45, -0.1, 0.15),
+        new THREE.Vector3(0.45, 0.05, 0.2),
+        new THREE.Vector3(-0.15, 0.4, 0.25)
+      ];
+
+      for (let i = 0; i < count; i++) {
+        const b = sorted[i];
+        b.userData.isPerched = true;
+        b.userData.palmOffset.copy(offsets[i]);
+        landedPalmButterflies.push(b);
+      }
+
+      playLandingSound(count);
+    }
+
+    // Select 1 butterfly to land on the finger tip
+    function assignFingerButterfly() {
+      releaseAllLandedButterflies();
+
+      let minDist = Infinity;
+      let closest = null;
+
+      butterflies.forEach(b => {
+        const d = b.position.distanceTo(targetFingerPos);
+        if (d < minDist) {
+          minDist = d;
+          closest = b;
+        }
+      });
+
+      if (closest) {
+        landedFingerButterfly = closest;
+        landedFingerButterfly.userData.isPerched = true;
+        playLandingSound(1);
+      }
+    }
+
+    function releaseAllLandedButterflies() {
+      if (landedFingerButterfly) {
+        landedFingerButterfly.userData.isPerched = false;
+        landedFingerButterfly = null;
+      }
+      landedPalmButterflies.forEach(b => {
+        b.userData.isPerched = false;
+      });
+      landedPalmButterflies = [];
+    }
+
+    function updateGestureUI(state, text) {
+      const indicatorText = document.getElementById('gesture-text');
+      const indicatorIcon = document.getElementById('gesture-icon');
+
+      indicatorText.innerText = text;
+
+      if (state === 'PALM_OPEN') {
+        indicatorIcon.innerHTML = '<i class="fas fa-hand-holding text-emerald-400 animate-pulse"></i>';
+      } else if (state === 'POINTING') {
+        indicatorIcon.innerHTML = '<i class="fas fa-hand-pointer text-yellow-400"></i>';
+      } else if (state === 'FIST') {
+        indicatorIcon.innerHTML = '<i class="fas fa-hand-fist text-blue-400"></i>';
+      } else if (state === 'OPEN') {
+        indicatorIcon.innerHTML = '<i class="fas fa-hand-sparkles text-pink-400"></i>';
+      } else {
+        indicatorIcon.innerHTML = '<i class="fas fa-video text-gray-400"></i>';
+      }
+    }
+
+    const clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const time = clock.getElapsedTime();
+      const faceRegion = { minX: -2.0, maxX: 2.0, minY: 0.2, maxY: 2.8 };
+
+      butterflies.forEach((b, idx) => {
+        const userData = b.userData;
+
+        // Wing Flapping Speed
+        let flapRate = userData.flapSpeed;
+        if (userData.isPerched) flapRate *= 0.25; // Gentle flutter when resting on palm or finger
+
+        const wingAngle = Math.sin(time * flapRate + userData.flapPhase) * 0.75;
+        userData.leftWing.rotation.y = wingAngle;
+        userData.rightWing.rotation.y = -wingAngle;
+
+        // --- Interaction Behaviors ---
+        if (userData.isPerched && currentGesture === 'PALM_OPEN') {
+          // Smoothly fly to and rest on palm with individual offsets
+          const targetPalmPos = handCenterPos.clone().add(userData.palmOffset);
+          b.position.lerp(targetPalmPos, 0.12);
+          b.rotation.z = Math.sin(time * 2 + idx) * 0.08;
+          b.rotation.x = 0.15;
+        } 
+        else if (userData.isPerched && currentGesture === 'POINTING' && b === landedFingerButterfly) {
+          // Land on index fingertip
+          b.position.lerp(targetFingerPos, 0.12);
+          b.rotation.z = Math.sin(time * 2) * 0.1;
+          b.rotation.x = 0.2;
+        } 
+        else {
+          // Wandering & Orbiting
+          let target = new THREE.Vector3();
+
+          if (currentGesture === 'FIST' && handLandmarks) {
+            // Gather around fist without clumping tight
+            const orbitAngle = time * 0.8 + idx * (Math.PI * 2 / butterflies.length);
+            const radius = 2.2 + Math.sin(time + idx) * 0.6;
+
+            target.set(
+              handCenterPos.x + Math.cos(orbitAngle) * radius,
+              handCenterPos.y + Math.sin(orbitAngle) * radius * 0.7,
+              handCenterPos.z + Math.sin(orbitAngle * 1.5) * 1.2
+            );
+          } else {
+            // Free Sky Flight
+            const offset = userData.wanderOffset;
+            target.set(
+              Math.sin(time * 0.4 + offset.x) * 6.5,
+              Math.cos(time * 0.3 + offset.y) * 4.0,
+              Math.sin(time * 0.5 + offset.z) * 3.0
+            );
+
+            // Avoid Face Overlay
+            if (target.x > faceRegion.minX && target.x < faceRegion.maxX &&
+                target.y > faceRegion.minY && target.y < faceRegion.maxY) {
+              target.y += 2.0;
+            }
+          }
+
+          // Smooth Acceleration
+          const steer = new THREE.Vector3().subVectors(target, b.position).multiplyScalar(0.015);
+          userData.velocity.add(steer);
+          userData.velocity.clampLength(0, 0.08);
+          b.position.add(userData.velocity);
+
+          // Orientation towards flight direction
+          if (userData.velocity.lengthSq() > 0.00001) {
+            const heading = b.position.clone().add(userData.velocity);
+            b.lookAt(heading);
+            b.rotateY(Math.PI / 2);
+          }
+        }
+      });
+
+      renderer.render(scene, threeCamera);
+    }
+
+    window.onload = () => {
+      initThreeScene();
+
+      // Start Button
+      document.getElementById('btn-start').addEventListener('click', () => {
+        initAudio();
+        initMediaPipe();
+      });
+
+      // Audio Toggle
+      document.getElementById('btn-audio').addEventListener('click', () => {
+        isAudioMuted = !isAudioMuted;
+        const icon = document.getElementById('audio-icon');
+        if (isAudioMuted) {
+          icon.className = 'fas fa-volume-mute text-red-400';
+        } else {
+          icon.className = 'fas fa-volume-up';
+          initAudio();
+        }
+      });
+
+      // Help Modal Toggle
+      const helpModal = document.getElementById('help-modal');
+      document.getElementById('btn-help').addEventListener('click', () => {
+        helpModal.classList.remove('hidden');
+      });
+      document.getElementById('btn-close-help').addEventListener('click', () => {
+        helpModal.classList.add('hidden');
+      });
+
+      // Animation Loop Start
+      animate();
+    };
+  </script>
+</body>
+</html>
